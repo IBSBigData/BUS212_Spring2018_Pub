@@ -1,4 +1,4 @@
-#Overview
+# Overview
 The goal of this assignment is to connect you to the course repository in GitHub, and to have you complete a few commonn actions using the platform.
 
 Specifically, after you have established an account and installed the necessary software on your computer, you will:
