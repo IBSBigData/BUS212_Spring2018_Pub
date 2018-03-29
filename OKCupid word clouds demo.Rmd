@@ -1,0 +1,160 @@
+---
+title: "OK Cupid basic word clouds"
+output:
+  word_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+## Introduction
+
+Text-mining requires considerable preparation of a list of words, eliminating common words (like 'and' or 'the'), and then compiling frequencies of common words and sequences of words (like "Big Data")
+
+In this illustration, we take the text self-descriptive essays submitted to *OK Cupid* and create a graphic commonly known as a *Word Cloud*.
+
+The raw text for this assignment is contained in a dataset called `profiles` within the R package `okcupiddata`.  You will need to install this package, along with the package `tidytext`.
+
+Note that the DataCamp course also uses `qdap` as an alternative to `tm`, and makes good use of these additional packages:
+
+* `plotrix`
+* `dendextend`
+* `RWeka`
+* `lsa` 
+
+This demo lays out several common and fundamental operations in a text-mining project. The  code uses the following packages, which are all invoked before the code that appears below. Check your RStudio list of _Packages_ and install any that are not present.
+
+* okcupiddata -- contains cleaned profile data for the case study
+* tm -- provides functionality for text mining
+* SnowballC -- to "stem" terms (group related roots)
+* wordcloud -- to produce word cloud graphics
+* RColorBrewer -- to enhance graphs with color
+
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(okcupiddata)  
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+```
+
+***
+## Create and Clean the Corpus
+
+The initial code chunk reads in the body of data from the `profiles` object. Most of the columns are responses to closed-ended multiple-choice questions where the phrasing is supplied by OK Cupid. The column we want is called `essay0`. Then the data is converted to a *Corpus* -- a collection of text documents. Because this is such a huge body of data, we'll randomly sample 10% or about 6000 responses for initial analysis.
+
+```{r}
+str(profiles)
+set.seed(1138) # for reproducible results
+n <- nrow(profiles)
+
+allessays <- data.frame(profiles$essay0)
+test_idx <- sample.int(n, size= round(0.1 * n))  # sample 10% of rows
+text <- data.frame(allessays[test_idx,])  
+corpus <- Corpus(VectorSource(text[,1]))
+
+```
+
+Next comes the phase of cleaning up the corpus. The following code chunk produces no output directly, but  converts all text to lowercase, removes punctuation, and removes numerals. 
+
+```{r}
+#Clean-up 
+corpus <- tm_map(corpus, tolower)  #make all text lower case
+corpus <- tm_map(corpus, removePunctuation) #remove all punctuation
+corpus <- tm_map(corpus, removeNumbers) # remove numbers
+
+```
+
+In any text, we often find plurals and other word forms that we'd prefer to treat as one word. "Stemming" refers to truncating words so that related terms are counted together.  This is where package `SnowballC` does its work. 
+
+```{r}
+#stemming to treat related terms alike
+####  NOTE FOR 2018: SHOULD STEM BEFORE STOP WORDS
+cleanset <- tm_map(corpus, stripWhitespace) # purge extra white space
+cleanset <- tm_map(cleanset, PlainTextDocument)
+cleanset <- tm_map(cleanset,stemDocument)
+```
+
+The next recommended step is to apply *stopwords* -- specifying terms that should be considered non-informative in the mining stages to follow. These may be common English words (articles, pronounds, etc.) or words that appear often in the corpus but have special status in this particular corpus.
+
+To see the default set of English stopwords, in the console type `stopwords("en")`. We can add or remove stopwords, depending on the nature of the data. For example, all of these OK Cupid clients live within 25 miles of San Francisco, so we may want to add those terms to the list of stopwords. Similarly, because this is a dating site where individuals meet other people, we might want the word "other" to be retained in the analysis, but note that "other" is a standard stop word.
+
+```{r}
+# apply standard English stopwords, and add "san" and "francisco"
+special <- c("san","francisco")
+myStopwords <- c(stopwords('english'),special)
+# remove "other" from English stop words
+
+myStopwords <- setdiff(myStopwords, c("other"))
+# now remove stopwords from the corpus
+cleanset <- tm_map(corpus, removeWords, myStopwords)
+
+```
+
+ After stemming and removing stop words, we create a *term document matrix*, omitting very short words. Lastly, we list frequent words -- we may want to revise our stopwords list to remove repeated but unremarkable words.
+
+
+```{r}
+#Build term document matrix
+cleanset <- tm_map(cleanset, PlainTextDocument)
+cleanset <- Corpus(VectorSource(cleanset))
+
+tdm <- TermDocumentMatrix(cleanset, control=list(wordLengths = c(4, Inf))) #overlook 2 letter words
+
+# inspect frequent words
+findFreqTerms(tdm, lowfreq=100)
+# NOTE: At this point, might choose to alter stop words list
+```
+
+A simple list is helpful, but gives little insight into how often each word occurs. Let's make a graph:
+
+```{r}
+#Bar plot
+termFrequency <- rowSums(as.matrix(tdm))
+termFrequency <- subset(termFrequency, termFrequency>=200)
+
+barplot(termFrequency, width=2, space = 1, xlim=c(0,180), ylim=c(0,1500), cex.names = .5,
+    cex.axis = .5,  las=2) 
+# las makes axis labels perpendicular, cex.names controls size of font
+
+```
+
+## Create Word Clouds
+
+Again, we might want to go back and alter the stopwords list. Once we are satisfied with the list, we're ready to make a word cloud, using package `wordcloud`. 
+
+```{r, message=FALSE, warning=FALSE}
+m <- as.matrix(tdm)
+wordFreq <- sort(rowSums(m), decreasing=TRUE)
+
+grayLevels <- gray((wordFreq+10)/(max(wordFreq)+10)) # sets number of gray shades to use
+
+# the command wordcloud is the main function:
+wordcloud(words=names(wordFreq), freq=wordFreq, min.freq=50, random.order=F, colors=grayLevels)
+```
+
+The word cloud above includes any word that occurs 50 times or more (`min.freq=50`); this creates an overcrowded curve that "spills over" the allocated space. 
+
+The next few commands show different ways to modify the size and appearance of a word cloud:
+
+```{r, message=FALSE, warning=FALSE}
+#Use same number of words, but re-scale the size
+wordcloud(words=names(wordFreq), freq=wordFreq, min.freq=3, 
+     scale = c(2, 0.2), random.order=F, colors=grayLevels)
+
+# increase the minimum frequency to 100 occurrences, further re-scale the size.
+wordcloud(words=names(wordFreq), freq=wordFreq, min.freq=100, 
+     scale = c(3, 0.2), random.order=F, colors=grayLevels)
+```
+
+The package `RColorBrewer` adds a wide variety of color palettes. You can experiment with this endlessly!
+
+```{r}
+# Add Color
+
+wordcloud(words=names(wordFreq), freq=wordFreq, max.words=100, scale = c(3, 0.2),random.order=F, colors=brewer.pal(6, "Dark2"))
+
+wordcloud(words=names(wordFreq), freq=wordFreq, max.words=100, scale = c(3, 0.2), random.order=F, colors=brewer.pal(9,"Reds"))
+```
+
