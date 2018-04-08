@@ -1,0 +1,175 @@
+---
+title: "Analyzing Phrases with tidytext"
+output:
+  word_document: default
+  html_notebook: default
+  html_document: default
+---
+
+As always, we set the working directory and then load the packages we want.
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(okcupiddata)
+library(scales) # scale functions for visualization
+library(igraph)
+library(ggraph)
+```
+
+We continue the analysis of the OKCupid essays, and just to add some further interests we compare responses of smokers and non-smokers. 
+
+For clarity, let's break the process down into steps. First, subset the okcupid `profiles` to include just the essay responses and the user's response about smoking.  The `data_frame` function creates a tibble. In creating the tibble, we rename `essay0` as `text` -- not necessary, but follows the example in Silge and Robinson.
+
+Then we create a new binary variable, `smoker` that identifies non-smokers as "no" and everyone else as "yes", dropping the original `smokes` variable (notice the command `select(-smokes)`, which selects all columns *except for* `smokes`. 
+
+```{r}
+tidy_okcupid <- select_(profiles,"essay0","smokes") 
+
+tidy_okcupid <- data_frame(smokes=profiles$smokes,text=profiles$essay0)
+tidy_okcupid <- tidy_okcupid %>%
+     mutate(smoker = ifelse(smokes=="no","no","yes")) %>% 
+     select(-smokes)
+```
+The next few lines of code *remove* all `NA` rows, because the `unnest_tokens` function requires complete cases. The last line in this chunk unnests 2-word phrases from the . You may also want to experiment with longer phrases.
+
+```{r}
+tidy_smoker <- tidy_okcupid %>%
+     select(smoker, text) %>%
+     na.omit()
+
+smoker_bigrams <- unnest_tokens(tidy_smoker, bigram, text, token="ngrams", n=2)
+
+smoker_bigrams
+```
+At this point, the tibble `smoker_bigrams` consists of more than 1,226,000 pairs of adjacent words. The next code chunk counts and sorts the pairs to find the most common ones. After that, it `separate`s the pairs into `word1` and `word2` to search for and remove stopwords, and then `unite`s the pairs that remain, finally recounting and sorting the shorter list of pairs.
+
+Consult Silge & Robinson to learn how to customize the list of stopwords.
+
+```{r}
+smoker_bigrams %>%
+     count(bigram, sort = TRUE)
+     
+bigrams_separated <- smoker_bigrams %>%
+     separate(bigram, c("word1", "word2"), sep = " ")
+     
+bigrams_filtered <- bigrams_separated %>%
+     filter(!word1 %in% stop_words$word) %>%
+     filter(!word2 %in% stop_words$word)
+     
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+     count(word1, word2, smoker, sort = TRUE)
+     
+
+bigram_counts
+     
+bigrams_united <- bigrams_filtered %>%
+     unite(bigram, word1, word2, sep = " ")
+     
+bigrams_united
+```
+As noted in class and in the readings, a simple frequency count can be misleading. The next code chunk weights term frequency by the inverse frequency within the documents (smokers vs non-smokers.
+```{r}
+     bigram_tf_idf <- bigrams_united %>%
+          count(smoker, bigram) %>%
+          bind_tf_idf(bigram, smoker, n) %>%
+          arrange(desc(tf_idf))
+     
+     bigram_tf_idf
+
+     bigrams_separated %>%
+          filter(word1 == "not") %>%
+          count(word1, word2, sort = TRUE)
+```
+```{r}
+plot_pairs <- bigram_tf_idf %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(pair = factor(bigram, levels = rev(unique(bigram))))
+
+plot_pairs %>% 
+  group_by(smoker) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(pair, tf_idf, fill = smoker)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~smoker, ncol = 2, scales = "free") +
+  coord_flip()
+```
+
+
+# Sentiment Analysis
+
+DataCamp introduced you to Sentiment Analysis. This next chunk follows the Silge & Robinson example. We specifically look for word pairs beginning that include negation (like "not"), since that can be a common style.
+
+```{r}
+     AFINN <- get_sentiments("afinn")
+     
+     not_words <- bigrams_separated %>%
+          filter(word1 == "not") %>%
+          inner_join(AFINN, by = c(word2 = "word")) %>%
+          count(word2, score, sort = TRUE) %>%
+          ungroup()
+     
+     not_words
+     
+     not_words %>%
+          mutate(contribution = n * score) %>%
+          arrange(desc(abs(contribution))) %>%
+          head(20) %>%
+          mutate(word2 = reorder(word2, contribution)) %>%
+          ggplot(aes(word2, n * score, fill = n * score > 0)) +
+          geom_col(show.legend = FALSE) +
+          xlab("Words preceded by \"not\"") +
+          ylab("Sentiment score * number of occurrences") +
+          coord_flip()
+     negation_words <- c("not", "no", "never", "without")
+     
+     negated_words <- bigrams_separated %>%
+          filter(word1 %in% negation_words) %>%
+          inner_join(AFINN, by = c(word2 = "word")) %>%
+          count(word1, word2, score, sort = TRUE) %>%
+          ungroup()
+```
+At this point we begin to make network graphs, first showing the most common word combinations for *non-smokers. You could then repeat and modify the chunk for smokers*.
+
+```{r}
+     
+     # original counts
+     bigram_counts
+     
+# filter for only relatively common combinations
+# might want to experiment with values other than 20 in filter line
+     bigram_graph <- bigram_counts %>%
+          group_by(smoker) %>%
+          filter(n > 20) %>%
+          filter(smoker=="yes") %>%
+          graph_from_data_frame()
+     
+     bigram_graph
+
+     set.seed(2018)
+     
+     ggraph(bigram_graph, layout = "fr") +
+          geom_edge_link() +
+          geom_node_point() +
+          geom_node_text(aes(label = name),  vjust = 1, hjust = 1) 
+```
+Finally, as in Chapter 4 of Silge and Robinson (which was not assigned), here's an alternative and more attractive network graph. This will use the same subset of participants as the one created above.
+
+```{r}
+     set.seed(2018)
+     
+     a <- grid::arrow(type = "closed", length = unit(.05, "inches"))
+     
+     ggraph(bigram_graph, layout = "fr") +
+          geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                         arrow = a, end_cap = circle(.05, 'inches')) +
+          geom_node_point(color = "lightblue", size = 5) +
+          geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+          theme_void()
+     
+
+
+```
+
